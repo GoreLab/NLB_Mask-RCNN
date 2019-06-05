@@ -1,0 +1,256 @@
+// ######################################################################################
+//
+//	ImageJ macro for creating polygon image annotations.
+//
+//	Requires user to select a folder of .jpg images, macro will automatically loop through 
+// 	each image. For each image, the user draws polygons using the freehand line tool 
+//	around objects of interest. Once all objects are annotated hit the [space] key.
+//	To skip an image, hit the [shift] key. For each image, the macro will save each
+//	polygon drawn by the user as a slice in a binary .tiff stack.
+//
+//	Ethan Stewart 2019
+//
+// ######################################################################################
+
+
+
+// Move ImageJ window to top left of screen
+script = 
+    "IJ.getInstance().setLocation(10, 0);" 
+eval("script", script); 
+
+// Moves log window beneath ImageJ window.
+script = 
+    "lw = WindowManager.getFrame('Log');\n"+ 
+    "if (lw!=null) {\n"+ 
+    "lw.setLocation(10,10);\n"+ 
+    "lw.setSize(570,10);\n"+ 
+    "}\n"; 
+eval("script", script);
+
+print("\\Clear");
+
+print("Running Lesion Annotation Macro..."); 
+
+dir = getDirectory("Choose a Directory ");
+
+list = getFileList(dir);
+
+// Check if output folders exist:
+annotated = false;
+skipped = false;
+masks = false;
+
+for(i=0;i<list.length;i++){
+
+	if(list[i] == "images_annotated/"){
+		done=true;
+	}
+	
+	if(list[i] == "images_skipped/"){
+		skipped=true;
+	}
+
+	if(list[i] == "tiff_masks/"){
+		masks=true;
+	}
+}
+
+
+// Make folders if not present:
+if (annotated == false){
+	File.makeDirectory(dir+"images_annotated"+File.separator);
+	print("Annotated folder created");
+}else{
+	print("Annotated folder exists");
+}
+
+if (skipped == false){
+	File.makeDirectory(dir+"images_skipped"+File.separator);
+	print("Skipped folder created");
+}else{
+	print("Skipped folder exists");
+}
+
+if (masks == false){
+	File.makeDirectory(dir+"tiff_masks"+File.separator);
+	print("Mask folder created");
+}else{
+	print("Mask folder exists");
+}
+
+//--------------------------- 
+// Randomise file list:
+function shuffle(array) { 
+	n = array.length;       // The number of items left to shuffle (loop invariant). 
+  	while (n > 1) { 
+		k = randomInt(n);     // 0 <= k < n. 
+		n--;                  // n is now the last pertinent index; 
+		temp = array[n];      // swap array[n] with array[k] (does nothing if k == n). 
+		array[n] = array[k]; 
+		array[k] = temp; 
+  	} 
+} 
+
+// returns a random number, 0 <= k < n 
+function randomInt(n) { 
+  	return n * random(); 
+} 
+
+subdir=list;
+
+shuffle(subdir);
+
+Array.print(subdir);
+
+// Loop through images:
+
+for (a=0;a<subdir.length;a++){
+
+	path = dir+subdir[a];
+
+	// Closes any open images:	
+	while (nImages>0) { 
+        selectImage(nImages); 
+        close(); 
+    } 
+
+	setBatchMode(false);
+
+	// Only open image (jpg) files:
+	if (endsWith(subdir[a], ".jpg") || endsWith(subdir[a], ".JPG")) {
+
+		open(path);
+
+		setLocation(270, 0, 800, 800); // Image location and size
+				
+		setForegroundColor(255, 255, 255);
+		setLineWidth(4);
+		
+		name = File.getName(path);
+		nameshort = File.nameWithoutExtension;
+		
+		setTool("freehand");
+		
+		// Get image width & height
+		getDimensions(width, height, channels, slices, frames);
+
+		if (isOpen("ROI Manager")) {
+			selectWindow("ROI Manager");
+			run("Close");
+		  }
+
+		if (isOpen("Results")) {
+			selectWindow("Results");
+			run("Close");
+		}
+
+		roiManager("show all with labels")
+		selectWindow("ROI Manager");
+		setLocation(10,100);
+		
+		
+		// Draw around lesions. Hit space to move on to next image, hit shift to skip image.
+		
+		skipimage=0;
+		state=0;
+		newState=0;
+
+		// Wait for space to be pressed:
+		while(state==0 && isKeyDown("space") == 0){
+			// Detect if shift key is pressed:
+			if(isKeyDown("shift")==1){
+			
+				skipimage=1;
+				state=1;
+			
+			}else{
+
+				getCursorLoc(xpos,ypos,zpos,flags);
+
+				if(flags != 0){
+					newState=1;
+				}
+
+				// Detect when mouse button is released:
+				if(flags==0 && newState==1){
+					
+					wait(100);
+					roiManager("Add");
+					selType=selectionType();
+					print(selType);
+					if(selectionType != -1){
+						run("Fill", "slice");
+						run("Select None");
+						
+					}else{
+						print("no selection");
+					}
+					
+					newState=0;
+				
+				}
+			}
+
+		}
+		
+
+		// Catch images skiped by mistake:
+		skipChoice="None";
+		
+		if(skipimage==1 && roiManager("count")>0){
+		
+			Dialog.create("Hang on!");
+			Dialog.addMessage("This image contains an annotation, are you sure you want to skip it?");
+			Dialog.addChoice("Skip image", newArray("Yes", "No"), "No");
+			Dialog.show;
+			
+			skipChoice=Dialog.getChoice();
+		}
+		
+		// Hide image
+		setBatchMode(true);
+
+		
+		// Add contents of ROI manager to binary .tiff image
+		if(roiManager("count") > 0 && skipChoice !="Yes"){
+
+			newImage(nameshort+"_mask", "8-bit black", width, height, roiManager("count"));
+		
+			// If image contains annotations:
+			for (k=0 ; k<roiManager("count"); k++) {
+				
+				roiManager("select", k);
+				selectImage(nameshort+"_mask");
+				setSlice(k+1); // not 0 indexed!
+				run("Fill", k+1);
+				run("Select None");
+
+			}
+		
+			selectImage(nameshort+"_mask");
+			saveAs("Tiff", dir+"/tiff_masks/"+nameshort+"_mask.tif");
+			close();
+
+			// Move file to annotated folder:
+			File.rename(dir+list[a], dir+"/images_annotated/"+list[a]);
+
+		}else{
+		
+		// Move file to skipped folder:
+		File.rename(dir+list[a], dir+"/images_skipped/"+list[a]);
+				
+		}
+		
+	}else{// If file does not end in .JPG macro skips to here
+		print("Not an image");
+	}
+}
+
+// Closes any open images:	
+while (nImages>0) { 
+    selectImage(nImages); 
+	close(); 
+} 
+    
+print("macro finished");
